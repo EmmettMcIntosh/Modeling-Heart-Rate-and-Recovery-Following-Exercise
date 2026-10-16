@@ -1,7 +1,7 @@
 # Modeling-Heart-Rate-and-Recovery-Following-Exercise
 This is a personal project that examines heart rate changes during the first 90 seconds of recovery following aerobic and anaerobic exercise using publicly available wearable device data. The dataset contains heart rate measurements collected during structured exercise sessions, which were cleaned and organized for exploratory analysis and statistical modeling in R. Two nonparametric regression methods, Local Averaging and Local Regression (LOESS), were used to estimate heart rate recovery patterns without assuming a predetermined functional relationship. Smoothing parameters were selected using cross-validation methods, including generalized cross-validation (GCV) for LOESS. Both methods revealed distinct estimated patterns between exercise groups, with aerobic exercise exhibiting greater curvature and a more pronounced negative change relative to the beginning of recovery. These findings demonstrate how nonparametric methods can be used to explore physiological responses to exercise and highlight the potential of wearable sensor data for characterizing heart rate dynamics.
 
-Please see the HR and Recovery Post-Exercise.Rmd file for the analysis. Data cleaning .Rmd and images of the exercise protocols used in the study are also included for anyone interested. 
+Please see the HR and Recovery Post-Exercise html file for the analysis. Data cleaning html and the pdf of the exercise protocols used in the study are also included for anyone interested. 
 
 Dataset: Hongn, A., Bosch, F., Prado, L., & Bonomini, P. (2025). Wearable Device Dataset from Induced Stress and Structured Exercise Sessions (version 1.0.1). PhysioNet. RRID:SCR_007345. https://doi.org/10.13026/he0v-tf17
 
