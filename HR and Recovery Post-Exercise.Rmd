@@ -1,0 +1,458 @@
+---
+title: "Modeling Heart Rate and Recovery Following Exercise"
+author: "Emmett McIntosh"
+date: "2026-08-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*Note: This is a personal project and thus should not be used as information in scholarly setting.*
+
+```{r libraries}
+library(tidyverse)
+```
+
+**Introduction**
+
+*Background:*
+
+The interest in doing this personal project comes from a personal hobby of mine: weight lifting. I found that the higher intensity the session (e.g., heavy back-squatting), the hungrier I felt afterwards. Transversely, lower intensity sessions (e.g., treadmill walk at 20:00 min/mile pace) caused me some hunger, but a relatively normal amount.
+
+According to the American Diabetes Association, intense weight lifting can cause a temporary spike of blood glucose levels as stress hormones (like adrenaline and cortisol) tell the liver to put stored glucose in the blood stream for higher energy/output. This short spike will suppress immediate hunger right after the workout, but as the hormone levels drop, the muscles are begging to restore that glycogen, and that appetite that had been suppressed during the workout comes back, but this time more intense.
+
+Similarly, this is why eating too many carbohydrates before a workout can be detrimental, as your body may not be able to keep its blood glucose in its desired range.
+
+*Motivation:*
+
+Patients with type 1 diabetes cannot control their glycemic levels, as their immune systems destroy cells in the pancreas that create insulin. Without insulin, sugar from food cannot enter your cells for energy and instead builds up in the blood (CDC). Therefore, automatic detection of stress levels and intensity of exercise can be valuable for pancreas control algorithms (Hongn et al., 2025).
+
+The researchers who came up with this data and problem provide that "The first step toward achieving this goal is to develop models capable of differentiating between stress, aerobic exercise, and anaerobic exercise in healthy individuals using non-invasive recordings." (Hongn et al., 2025).
+
+Building on this goal, this project will use the wearable device data to examine how heart rate changes after different types of exercise. Rather than assuming that heart rate follows a predetermined linear or polynomial pattern over time, we will use nonparametric regression to estimate the underlying heart rate (HR) response and recovery curves. Local averaging and local regression will be used to model HR change during the first 90 seconds of recovery, allowing the estimated curves for aerobic and anaerobic exercise to be visually and descriptively compared. The goal is to identify differences in the estimated shape and rate of HR change between the two exercise groups.
+
+Identifying these differences may provide additional insight into how wearable sensor data can be used to distinguish physiological responses to different exercise intensities.
+
+**Dataset Description**
+
+Full data description can be found at the link to the dataset in the references.
+
+Researchers from the University of Buenos Aires, Technological Institute of Buenos Aires, and Argentinian Institute of Mathematics gathered wearable data of induced stress and exercise with the hope of creating models that can tell, non-invasively, whether a body is experiencing stress or undergoing aerobic (running, walking, biking, etc.) or anaerobic (heavy weightlifting, sprinting, HIIT, etc.) exercise.
+
+The measurements gathered were Blood Volume Pulse (BVP), Heart Rate (HR), Skin Temperature, and Nervous System Arousal.
+
+The study involved 36 healthy volunteers for stress sessions (Stroop Test then Trier Mental Challenge Test), 30 for aerobic exercises (stationary biking), and 31 for anaerobic exercises (max effort stationary biking).
+
+We only need a small subset of the data collected by the wearable to evaluate heart rate response and recovery following aerobic vs. anaerobic exercise; Subject IDs, HR, and event times.
+
+**Data Preprocessing**
+
+In order to get this specific sub-sample of data, the cleaning was quite tedious due as there were many folders from the different subjects, across different protocols, and different exercise types.
+
+The data was processed in another .rmd sheet. If you are interested, check out the accompanying file in this repo, "Data Cleaning".
+
+Read in datasets:
+
+```{r dataset import}
+hr_analysis = read.csv("/Users/emmettmcintosh/Personal Projects/Modeling HR and Recovery Post-Exercise/Processed Data/hr_analysis.csv")
+recovery_data = read.csv("/Users/emmettmcintosh/Personal Projects/Modeling HR and Recovery Post-Exercise/Processed Data/recovery_data.csv")
+```
+
+**Statistical Methodology**
+
+Nonparametric regression will be used to examine the relationship between time and heart rate (HR) during post-exercise recovery. Unlike parametric regression methods that assume the relationship between variables follows a specified form, nonparametric regression allows the shape of the relationship to be estimated to be estimated directly from the observed data. This kind of flexibility is useful for our heart rate data because the physiological response to exercise recovery may not follow a simple linear or polynomial pattern. Separate regression curves will be estimated for the aerobic and anaerobic exercise groups so that the underlying patterns in HR over time can be visualized and compared.
+
+Because nonparametric regression attempts to 'learn' the form of the relationship, it requires a balance between fitting the observed data and producing a sufficiently smooth estimate of the underlying relationship. Therefore we will rely on model tuning to determine the appropriate level of smoothing. The resulting models will be evaluated based on their ability to represent the general HR path over time without overfitting. The fitted aerobic and anaerobic curves will then be visually and descriptively compared to examine how the estimated shape and rate of HR change vary between the two exercise groups.
+
+Local averaging and local regression (LOESS) will be used to estimate the relationship between recovery time and HR change. Smoothing will be selected using data-driven cross-validation procedures rather than choosing the degree of smoothing solely by visual inspection. The resulting aerobic and anaerobic curves will then be visually and descriptively compared to examine differences in their estimated recovery patterns.
+
+**Exploratory Data Analysis**
+
+Before fitting the nonparametric regression models, exploratory data analysis was conducted to better understand the distribution of HR measurements and the structure of the exercise and recovery data. Close attention was given to differences between aerobic and anaerobic exercise, the relationship between HR and time, and the amount of recovery data available across subjects and exercise.
+
+1.  Heart Rate Distributions
+
+Find descriptive statistics for both exercise types to characterize the overall HR levels and variability observed during aerobic and anaerobic tests.
+
+```{r hr dist}
+hr_analysis %>%
+  group_by(exercise) %>%
+  summarize(
+    n = n(), 
+    mean_HR = mean(HR, na.rm = TRUE), 
+    median_HR = median(HR, na.rm = TRUE),
+    sd_HR = sd(HR, na.rm = TRUE),
+    min_HR = min(HR, na.rm = TRUE),
+    max_HR = max(HR, na.rm = TRUE),
+  )
+```
+
+We can see that aerobic exercises have a higher mean and median HR, as well as greater variability than anaerobic exercise.
+
+The same descriptive statistics were calculated using only observations identified as part of a recovery period. Starting recovery HR was also summarized because differences in HR at the beginning of recovery could affect comparisons of absolute HR trajectories between exercise types.
+
+```{r hr dist recovery}
+recovery_data %>%
+  group_by(exercise) %>%
+  summarize(
+    n = n(), 
+    mean_HR = mean(HR, na.rm = TRUE), 
+    median_HR = median(HR, na.rm = TRUE),
+    sd_HR = sd(HR, na.rm = TRUE),
+    min_HR = min(HR, na.rm = TRUE),
+    max_HR = max(HR, na.rm = TRUE),
+    mean_start_HR = mean(recovery_start_HR, na.rm = TRUE)
+  )
+```
+
+Again, the mean & median HR as well as the variability are higher for the aerobic group.
+
+2.  We now visualize the distributions of HR measurements to study the overall shape and see whether the numerical quantities we found above are well-represent the observed data.
+
+```{r dist viz}
+ggplot(hr_analysis, aes(x = HR, fill = exercise)) +
+  geom_density(alpha = 0.4) + facet_wrap(~ exercise) + 
+  labs(title = "dist of HR by exercise type", x = "HR (bpm)", y = "density") +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+We see that HR measurements in both exercise groups are non-symmetric and appear to contain multiple peaks. The Aerobic exercise seems to have a wider range of HR values and a larger upper tail. These distributions suggest that the overall summary statistics do not capture the structure HR measurements, mostly because observations were collected across different stages and times within each exercise session.
+
+Because the primary focus/question concerns how HR changes over time, the analysis now focuses on the temporal structure of the data.
+
+3.  Defining a common recovery window.
+
+The aerobic and anaerobic exercise protocols differed in the structure and duration of their recovery periods. Aerobic sessions contained a single cooldown period following the exercise protocol, and the anaerobic sessions contained multiple cooldown periods following repeated sprint 'bouts'. Each anaerobic recovery bout was therefore treated as a separate recovery trajectory, with recovery_time = 0 representing the beginning of the corresponding cooldown period. As a visual reference, I included the screenshots of the Aerobic and Anaerobic Protocols used in the study in this repo.
+
+Recovery duration also varied across subjects and protocol versions. As recovery time increased, fewer trajectories continued to contribute observations, making comparisons over the entire available recovery period inappropriate. To identify a common interval with adequate representation across exercise types and protocol versions, data completeness was evaluated at recovery windows of 60, 90, 120, 150, and 180 seconds.
+
+In the Data Cleaning file there is a plot showing the recovery data coverage by analysis window that may be a helpful visualization and explain why 90 seconds is an appropriate recovery window. In short, data coverage remained above 90% for all four exercise/protocol combinations through the first 90 seconds of recovery. Extending the recovery window to 120 seconds resulted in a significant loss of coverage. Therefore, the first 90 seconds were selected as the common recovery interval for analysis. This interval provided the longest examined interval for which at least 90% of trajectories were complete across all exercise and protocol combinations.
+
+A restricted dataset, recovery_90, was created containing observations with recovery times from 0-90 seconds. Restricting the analysis to this interval reduces the possibility that differences in the fitted recovery curves are driven by changing subject or protocol representation at later recovery times rather than differences in HR recovery by itself.
+
+So, using the common 90-second recovery window, HR trajectories were first examined on their original bpm scale.
+
+An exploratory LOESS smoother was included to visualize the overall pattern of HR over time; *this smoother was used for exploratory visualization only and does not represent the final fitted model*.
+
+```{r raw hr loess}
+ggplot(recovery_90,
+       aes(x = recovery_time, y = HR, color = exercise)) +
+  geom_point(alpha = 0.05, size = 0.4) +
+  geom_smooth(
+    method = "loess",
+    se = FALSE
+  ) +
+  facet_wrap(~ exercise) +
+  labs(
+    title = "Heart Rate During the First 90 Seconds of Recovery",
+    x = "Recovery Time (seconds)",
+    y = "Heart Rate (bpm)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+We see that aerobic recovery began at a higher average HR than anaerobic recovery, consistent with the descriptive statistics found previously. Despite substantial variability among individual trajectories, the pooled smooth curves showed relatively little change in absolute HR over the first 90 seconds for either exercise type. However, because the two exercise groups began recovery at different HR levels, comparisons based solely on absolute HR could confound differences in starting HR with differences in the subsequent recovery response.
+
+4.  HR_drop
+
+Heart Rate drop (created in Data Cleaning file) is defined as
+
+$HR_{drop,i}(t) = HR_{start,i} - HR_i(t)$
+
+To account for differences in HR at the beginning of recovery, HR change was expressed relative to each trajectory's starting recovery HR.
+
+HR_drop was calculated as the starting recovery HR minus the observed HR at each subsequent time point. Therefore, all trajectories begin at HR_drop = 0; positive values indicate that HR has decreased from its starting value, while negative values indicate that HR has increased.
+
+```{r hr drop loess}
+ggplot(recovery_90,
+       aes(x = recovery_time, y = HR_drop, color = exercise)) +
+  geom_point(alpha = 0.05, size = 0.4) +
+  geom_smooth(
+    method = "loess",
+    se = FALSE
+  ) +
+  facet_wrap(~ exercise) +
+  labs(
+    title = "Heart Rate Change During the First 90 Seconds of Recovery",
+    x = "Recovery Time (seconds)",
+    y = "Heart Rate Drop (bpm)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+We see that the HR drop trajectories show substantial variability among subjects and anaerobic recovery bouts. The exploratory smooth curves remain relatively close to zero during the first 90 seconds, suggesting that the average immediate recovery pattern is considerably smaller than the variation observed among individual trajectories.
+
+So, to conclude the EDA, the nonlinear appearance and heterogeneity of these trajectories encourages the use of nonparametric regression the estimate the underlying recovery relationship without imposing a predetermined functional form.
+
+**Nonparametric Regression Analysis**
+
+*Local Averaging*
+
+Local averaging was used to first estimate the relationship between recovery time and change in heart rate without accepting a predetermined functional form. For a given recovery time, the local averaging estimator calculates the mean HR drop among observations with recovery times within a 'neighborhood' of that point. Separate functions were estimated for aerobic and anaerobic exercises so that differences in the shape of the recovery response could be determined.
+
+As for the span parameter $s$ , which determines the size of the local neighborhood we use, smaller values of $s$ will use fewer nearby observations and allow the fitted curve to respond more closely to local variation in the data, while larger spans will use more observations and therefore give us smoother estimates. Since the choice of the span can substantially impact the resulting recovery curve, multiple span values are examined initially before selecting a final value using cross-validation.
+
+Starting with one exercise group at a time using spans 0.1, 0.2, 0.3, and 0.4:
+
+```{r local average var build}
+#separate aerobic and anaerobic data
+aerobic_rec = recovery_90 %>%
+  filter(exercise == "Aerobic")
+anaerobic_rec = recovery_90 %>%
+  filter(exercise == "Anaerobic")
+#define x and y
+x_aer = aerobic_rec$recovery_time
+y_aer = aerobic_rec$HR_drop
+x_ana = anaerobic_rec$recovery_time
+y_ana = anaerobic_rec$HR_drop
+#span values to investigate
+spans = c(0.1, 0.2, 0.3, 0.4)
+```
+
+Now define the local averaging function:
+
+```{r local avg func}
+local_average = function(x, y, span) {
+  #points where we want to estimate f(x)
+  x_grid = sort(unique(x))
+  #number of observations to include
+  n = length(x)
+  n_local = ceiling(span * n)
+  #create vector to store estimates
+  y_hat = rep(NA, length(x_grid))
+  # move local averaging window across x
+  for(j in seq_along(x_grid)) {
+    xstar = x_grid[j]
+    #distance of every observation from x*
+    distance = abs(x - xstar)
+    #find distance to the n_local-th nearest observation
+    delta = sort(distance)[n_local]
+    #define weights
+    w = rep(0, n)
+    w[distance <= delta] = 1
+    #calculate local average
+    y_hat[j] = sum(y * w, na.rm = TRUE) /
+      sum(w)
+  }
+  #return estimated curve
+  data.frame(recovery_time = x_grid, HR_drop_hat = y_hat, span = span)
+}
+```
+
+Now apply to aerobic and anaerobic data for the four spans:
+
+```{r apply la func}
+aerobic_local = lapply(
+  spans,
+  function(s) {
+    local_average(x = x_aer, y = y_aer, span = s)
+  }
+) %>%
+  bind_rows() %>%
+  mutate(exercise = "Aerobic")
+```
+
+Do same for anaerobic:
+
+```{r apply la func ana}
+anaerobic_local = lapply(
+  spans,
+  function(s) {
+    local_average(x = x_ana, y = y_ana, span = s)
+  }
+) %>%
+  bind_rows() %>%
+  mutate(exercise = "Anaerobic")
+```
+
+And combine them:
+
+```{r combine aer ana}
+local_average_results = bind_rows(aerobic_local, anaerobic_local)
+```
+
+Finally, plot:
+
+```{r la combined plot}
+ggplot() +
+  geom_point(data = recovery_90, aes(x = recovery_time, y = HR_drop), alpha = 0.02, size = 0.2) +
+  geom_line(data = local_average_results, aes(x = recovery_time, y = HR_drop_hat), linewidth = 1.2) +
+  facet_grid(exercise ~ span, labeller = label_both) +
+  coord_cartesian(ylim = c(-15, 15)) +
+  labs(
+    title = "Local Averaging Estimates of Heart Rate Recovery",
+    subtitle = "Comparison of Span Values",
+    x = "Recovery Time (seconds)",
+    y = "Heart Rate Drop (bpm)"
+  ) +
+  theme_minimal()
+```
+
+For aerobic recovery, all four spans tell us that HR_drop remains near 0 during approximately the first \~50 seconds and then becomes increasingly negative, reaching roughly -4 to -6 bpm by 90 seconds. This means that HR is actually higher than its value at the beginning of the cooldown later in the 90 second period, on average.
+
+*In other words, as the recovery period goes to 90 seconds, HR increases on average.*
+
+For anaerobic recovery, the estimated relationship is much flatter. There is a small initial fluctuation around zero followed by a gradual negative trend, ending around \~2 bpm. Again, there is considerable variation among individual trajectories despite the relatively flat average curve.
+
+As for the spans, they estimates don't change dramatically across $s$ $= 0.1 - 0.4$. Encouraging.
+
+*Selecting the Span*
+
+We now aim to determine which span provides the best predictive estimate of the underlying relationship. Although the fitted curves for several candidate spans appear visually similar, selecting a span based solely on appearance would be arbitrary. Therefore, ordinary cross-validation will be used to select the span that minimizes squared prediction error. This procedure is implemented automatically be the supsmu() function when the span is not specified.
+
+Run supsmu() separately for aerobic and anaerobic recovery:
+
+```{r supsmu}
+aerobic_rec = recovery_90 %>%
+  filter(exercise == "Aerobic") %>%
+  arrange(recovery_time)
+anaerobic_rec = recovery_90 %>%
+  filter(exercise == "Anaerobic") %>%
+  arrange(recovery_time)
+```
+
+Then fit the models. We don't specify the span parameter in order to have supsmu() to select the amount of smoothing automatically:
+
+```{r fit supsmu}
+aerobic_supsmu = supsmu(x = aerobic_rec$recovery_time, y = aerobic_rec$HR_drop)
+anaerobic_supsmu = supsmu(x = anaerobic_rec$recovery_time, y = anaerobic_rec$HR_drop)
+```
+
+Put fitted curves into data frames:
+
+```{r ss data frames}
+aerobic_supsmu_df = data.frame(recovery_time = aerobic_supsmu$x, HR_drop_hat = aerobic_supsmu$y, exercise = "Aerobic")
+
+anaerobic_supsmu_df = data.frame(recovery_time = anaerobic_supsmu$x, HR_drop_hat = anaerobic_supsmu$y, exercise = "Anaerobic")
+
+supsmu_results = bind_rows(aerobic_supsmu_df,anaerobic_supsmu_df)
+```
+
+Plot the final estimates:
+
+```{r plot final ss}
+ggplot() +
+  geom_point(data = recovery_90, aes(x = recovery_time, y = HR_drop), alpha = 0.02, size = 0.2) +
+  geom_line(data = supsmu_results, aes(x = recovery_time, y = HR_drop_hat), linewidth = 1.2) +
+  facet_wrap(~ exercise) +
+  coord_cartesian(ylim = c(-15, 15)) +
+  labs(
+    title = "Cross-Validated Local Averaging Estimates",
+    x = "Recovery Time (seconds)",
+    y = "Heart Rate Drop (bpm)"
+  ) +
+  theme_minimal()
+```
+
+Our cross-validated local averaging estimates show different average HR-change patterns between aerobic and anaerobic recovery. For aerobic exercise, the estimated HR_drop remains close to zero for the first \~40 seconds, and then becomes progressively more negative until it reaches about \~6bpm near 90 seconds.
+
+The aerobic curve also trends negative, but its pattern is more gradual and irregular. There is an initial decline, followed by a level-out around the 40 second mark, then a more distinct downward curve beginning around 50 seconds. After 90 seconds, the fitted value is \~3bpm.
+
+This means average HR increased relative to HR measured at the beginning of the cooldown, particularly during the latter portion of the 90-second window.
+
+The important thing to note is the difference in shape of the curves: aerobic shows a relatively sharp drop while anaerobic is smaller and less smooth over most of the interval.
+
+So, in conclusion, the local average testing has provided evidence of different estimated shapes, but we still need to perform inferential testing of the difference between the functions to establish a statistically significant difference between aerobic and anaerobic recovery.
+
+*Local Regression*
+
+Local regression provides a more flexible approach to estimating the underlying heart rate recovery curve by fitting regression models to observations within local neighborhoods of recovery time. Unlike local averaging, which estimates the response by averaging nearby observations, local regression assigns greater weight to observations closer to the point being estimated. This allows the model to better capture changes in the shape and rate of HR recovery over time.
+
+As with local averaging, the amount of smoothing in a local regression estimate is controlled by the span parameter. Rather than comparing several arbitrarily selected spans, generalized cross-validation (GCV) will be used to select the span that provides the best predictive fit to the observed data. GCV balances model fit and complexity y penalizing overly flexible estimates, allowing the span to be selected directly from the data.
+
+The optimal span will be determined separately for the aerobic and anaerobic groups using the loess.gcv() function.
+
+First, define the GCV function (Helwig Teaching Materials, 2026):
+
+```{r def gcv}
+loess.gcv = function(x, y){
+  nobs = length(y)
+  sxs = sort(x, index.return = TRUE)
+  x = sxs$x
+  y = y[sxs$ix]
+  
+  tune.loess = function(s){
+    lo = loess(y ~ x, span = s)
+    mean((lo$fitted - y)^2) / (1 - lo$trace.hat / nobs)^2
+  }
+  os = optimize(
+    tune.loess, interval = c(.01, .99))$minimum
+  lo = loess(y ~ x, span = os)
+  list(x = x, y = lo$fitted, df = lo$trace.hat, span = os)
+}
+```
+
+Now apply it separately to the two exercise groups:
+
+```{r apply gcv func}
+aerobic_90 = recovery_90 %>%
+  filter(exercise == "Aerobic")
+anaerobic_90 = recovery_90 %>%
+  filter(exercise == "Anaerobic")
+
+#gcv tuned local regression
+aerobic_loess = loess.gcv(x = aerobic_90$recovery_time, y = aerobic_90$HR_drop)
+anaerobic_loess = loess.gcv(x = anaerobic_90$recovery_time, y = anaerobic_90$HR_drop)
+```
+
+Now let's look at the selected spans before we plot anything:
+
+```{r selected spans}
+aerobic_loess$span
+anaerobic_loess$span
+```
+
+For aerobic recovery, GCV selected a span of 0.981. For anaerobic recovery, it selected a span of 0.969. Because both spans are close to 1, the procedure favors relatively broad local neighborhoods and therefore fairly smooth HR-change curves rather than highly variable curves that follow small fluctuations in the data. The similar selected spans also make the eventual comparison between exercise groups straightforward.
+
+Now we fit and plot the final LOESS estimates. First store final GCV-selected LOESS estimates:
+
+```{r fit and plot final loess}
+aerobic_loess_df = data.frame(recovery_time = aerobic_loess$x, HR_drop_hat = aerobic_loess$y, exercise = "Aerobic")
+anaerobic_loess_df = data.frame(recovery_time = anaerobic_loess$x, HR_drop_hat = anaerobic_loess$y, exercise = "Anaerobic")
+loess_results = bind_rows(aerobic_loess_df, anaerobic_loess_df)
+```
+
+Then plot them:
+
+```{r final plot loess}
+ggplot() +
+  geom_point(data = recovery_90, aes(x = recovery_time, y = HR_drop), alpha = 0.07, size = 0.2) +
+  geom_line(data = loess_results, aes(x = recovery_time, y = HR_drop_hat), linewidth = 1.2) +
+  facet_wrap(~ exercise) +
+  coord_cartesian(ylim = c(-15, 15)) +
+  labs(
+    title = "GCV-Selected Local Regression Estimates",
+    x = "Recovery Time (seconds)",
+    y = "Heart Rate Drop (bpm)"
+  ) +
+  theme_minimal()
+```
+
+The GCV-selected local regression estimates reveal different HR-change patterns between the two exercise groups. Following aerobic exercise, HR remained relatively stable during the beginning of the recovery period before exhibiting an increasingly negative change later in the 90-second window. In contrast, the anaerobic group displayed a smaller and approximately linear negative change throughout the recovery period.
+
+These results suggest that the shape and rate of post-exercise HR change differ between aerobic and anaerobic exercise.
+
+These general patterns are consistent with the local averaging estimates, particularly the greater downward curve observed for the aerobic group.
+
+**Discussion**
+
+The results of this analysis suggest that heart rate changes during the first 90 seconds of recovery follow different patterns after aerobic and anaerobic exercise. Both local averaging and local regression showed a more pronounced downward trend in HR_drop following aerobic exercise, particularly during the latter portion of the recovery window, while the anaerobic group exhibited a smaller and more gradual change. Because negative HR_drop values indicate that heart rate was higher than at the beginning of the recorded cooldown, these findings suggest that heart rate did not necessarily begin decreasing immediately during the designated recovery period. This highlights the value of using nonparametric regression, since the aerobic pattern in particular showed curvature that may not have been adequately represented by a simple linear model. The general agreement between the local averaging and local regression estimates also provides descriptive evidence that the observed patterns were not solely dependent on a single smoothing method.
+
+These findings support the original motivation of examining whether wearable sensor data can distinguish physiological responses associated with different exercise intensities. In the context of automated stress and exercise detection, differences in the shape of heart rate change over time may provide useful information beyond heart rate measurements at individual time points. However, these results are descriptive, and further analysis would be necessary to determine whether the observed differences generalize beyond the individuals and exervise protocols included in this dataset.
+
+**Conclusion**
+
+This project demonstrated how nonparametric regression can be used to characterize heart rate changes following different types of exercise without assuming a predetermined relationship over time. Both local averaging and local regression revealed distinct recovery patterns between the aerobic and anaerobic exercise groups during the first 90 seconds of recovery. These results highlight the potential value of modeling the shape of heart rate trajectories, rather than relying only on individual heart rate measurements, when distinguishing physiological responses to exercise.
+
+Future work could build on these findings by formally testing differences between recovery curves and evaluating whether these patterns generalize to new individuals.
+
+**References**
+
+- Dataset: Hongn, A., Bosch, F., Prado, L., & Bonomini, P. (2025). Wearable Device Dataset from Induced Stress and Structured Exercise Sessions (version 1.0.1). *PhysioNet*. RRID:SCR_007345. <https://doi.org/10.13026/he0v-tf17>
+- American Diabetes Association: <https://diabetes.org/health-wellness/fitness/why-does-exercise-sometimes-raise-blood-sugar>
+- CDC Type 1 Diabetes: <https://www.cdc.gov/diabetes/about/about-type-1-diabetes.html>
+- Nonparametric Regression ideation: <https://github.com/nathaniel-helwig/teaching-materials/blob/main/stat-5601/2026/smooth-notes.html>
